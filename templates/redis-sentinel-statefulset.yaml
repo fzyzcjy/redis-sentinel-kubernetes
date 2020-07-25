@@ -1,0 +1,104 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "tom-redis.names.statefulSet.sentinel" . }}
+  labels: {{- include "tom-redis.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.sentinel.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "tom-redis.selectorLabels" . | nindent 6 }}
+      redis-role: sentinel
+  serviceName: {{ template "tom-redis.fullname" . }}-headless # <-- TODO ??
+  template:
+    metadata:
+      labels:
+        {{- include "tom-redis.labels" . | nindent 8 }}
+        {{- include "tom-redis.selectorLabels" . | nindent 8 }}
+        redis-role: sentinel
+    spec:
+      serviceAccountName: {{ include "tom-redis.serviceAccountName" . }}
+      initContainers:
+        - name: init-sentinel
+          image: {{ .Values.images.sentinel | quote }}
+          command:
+            - bash
+            - "-c"
+            - |
+              set -exu
+
+              if [[ ! -f /mnt/conf/sentinel.conf ]];then
+                cp /mnt/config-map/sentinel.conf /mnt/conf/sentinel.conf
+                printf "\nsentinel auth-pass {{ .Values.sentinel.masterSet }} $REDIS_PASSWORD" >> /mnt/conf/sentinel.conf
+                printf "\nrequirepass $REDIS_PASSWORD" >> /mnt/conf/sentinel.conf
+                # NOTE the following line is to create static ids
+                printf "\nsentinel myid $(echo $HOSTNAME | sha1sum | awk '{ print $1 }')" >> /mnt/conf/sentinel.conf
+              fi
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ template "tom-redis.secretName" . }}
+                  key: {{ .Values.secretPasswordKey }}
+          volumeMounts:
+            - name: config-map
+              mountPath: /mnt/config-map
+            - name: conf
+              mountPath: /mnt/conf
+      containers:
+        - name: sentinel
+          securityContext: {{- toYaml .Values.securityContext | nindent 12 }}
+          image: {{ .Values.images.sentinel | quote }}
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -exu
+
+{{/* TODO should not use this? */}}
+{{/*              echo "Getting information about current running sentinels"*/}}
+{{/*              # Get information from existing sentinels*/}}
+{{/*              existing_sentinels=$(timeout -s 3 {{ .Values.sentinel.initialCheckTimeout }} redis-cli --raw -h {{ template "redis.fullname" . }} -a "$REDIS_PASSWORD" -p {{ .Values.sentinel.service.sentinelPort }} SENTINEL sentinels {{ .Values.sentinel.masterSet }})*/}}
+{{/*              echo "$existing_sentinels" | awk -f /health/parse_sentinels.awk | tee -a  /opt/bitnami/redis-sentinel/etc/sentinel.conf*/}}
+
+              redis-server /mnt/conf/sentinel.conf --sentinel
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ template "tom-redis.secretName" . }}
+                  key: {{ .Values.secretPasswordKey }}
+            - name: REDIS_SENTINEL_PORT
+              value: {{ .Values.sentinel.port | quote }}
+          ports:
+            - name: redis-sentinel
+              containerPort: {{ .Values.sentinel.port }}
+          livenessProbe:
+            {{- toYaml .Values.sentinel.livenessProbe | nindent 12 }}
+            exec:
+              command:
+                - sh
+                - -c
+                - /health/ping_sentinel.sh {{ .Values.sentinel.livenessProbe.timeoutSeconds }}
+          readinessProbe:
+            {{- toYaml .Values.sentinel.readinessProbe | nindent 12 }}
+            exec:
+              command:
+                - sh
+                - -c
+                - /health/ping_sentinel.sh {{ .Values.sentinel.readinessProbe.timeoutSeconds }}
+          volumeMounts:
+            - name: health
+              mountPath: /health
+            - name: conf
+              mountPath: /mnt/conf
+      volumes:
+        - name: health
+          configMap:
+            name: {{ template "tom-redis.fullname" . }}-health
+            defaultMode: 0755
+        - name: config-map
+          configMap:
+            name: {{ template "tom-redis.fullname" . }}
+        - name: conf
+          emptyDir: {}

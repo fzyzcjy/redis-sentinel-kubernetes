@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "tom-redis.headlessServiceName" . }}
+  labels: {{- include "tom-redis.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  clusterIP: None
+  ports:
+    - name: redis
+      port: {{ .Values.redisPort }}
+      targetPort: redis
+  {{/*      TODO */}}
+  {{/*    - name: redis-sentinel*/}}
+  {{/*      port: {{ .Values.sentinel.port }}*/}}
+  {{/*      targetPort: redis-sentinel*/}}
+  selector:
+  {{- include "tom-redis.selectorLabels" . | nindent 4 }}
+  {{/*  TODO 到底select谁???  */}}

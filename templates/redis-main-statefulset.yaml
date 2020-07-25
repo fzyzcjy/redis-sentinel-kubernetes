@@ -1,0 +1,150 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "tom-redis.names.statefulSet.main" . }}
+  labels: {{- include "tom-redis.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.main.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "tom-redis.selectorLabels" . | nindent 6 }}
+      redis-role: main
+  serviceName: {{ template "tom-redis.fullname" . }}-headless # <-- TODO ??
+  template:
+    metadata:
+      labels:
+        {{- include "tom-redis.labels" . | nindent 8 }}
+        {{- include "tom-redis.selectorLabels" . | nindent 8 }}
+        redis-role: main
+    spec:
+      serviceAccountName: {{ include "tom-redis.serviceAccountName" . }}
+      initContainers:
+      - name: init-redis
+        image: {{ .Values.images.main | quote }}
+        command:
+          - /bin/bash
+          - "-c"
+          - |
+            set -exu
+
+            # Generate server-id from pod ordinal index.
+            [[ `hostname` =~ -([0-9]+)$ ]] || exit 1
+            ordinal=${BASH_REMATCH[1]}
+
+            # Copy appropriate conf.d files from config-map to emptyDir.
+            if [[ $ordinal -eq 0 ]]; then
+              if [[ ! -f /mnt/conf/master.conf ]];then
+                cp /mnt/config-map/master.conf /mnt/conf/master.conf
+              fi
+            else
+              if [[ ! -f /mnt/conf/replica.conf ]];then
+                cp /mnt/config-map/replica.conf /mnt/conf/replica.conf
+              fi
+            fi
+
+            if [[ ! -f /mnt/conf/redis.conf ]];then
+              cp /mnt/config-map/redis.conf /mnt/conf/redis.conf
+            fi
+        volumeMounts:
+          - name: config-map
+            mountPath: /mnt/config-map
+          - name: conf
+            mountPath: /mnt/conf
+      containers:
+        - name: redis
+          securityContext: {{- toYaml .Values.securityContext | nindent 12 }}
+          image: {{ .Values.images.main | quote }}
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -exu
+
+              [[ `hostname` =~ -([0-9]+)$ ]] || exit 1
+              ordinal=${BASH_REMATCH[1]}
+
+              ARGS=("--port" "${REDIS_PORT_LOCAL}")
+              ARGS+=("--requirepass" "${REDIS_PASSWORD}")
+              ARGS+=("--masterauth" "${REDIS_PASSWORD}")
+
+              ARGS+=("--include" "/mnt/conf/redis.conf")
+
+              if [[ $ordinal -eq 0 ]]; then
+                ARGS+=("--include" "/mnt/conf/master.conf")
+              else
+                ARGS+=("--include" "/mnt/conf/replica.conf")
+              fi
+
+              if [[ $ordinal -ne 0 ]]; then
+                ARGS+=("--slaveof" "${REDIS_HOST_MASTER}" "${REDIS_PORT_MASTER}")
+              fi
+
+{{/*              {{- if .Values.master.command }}*/}}
+{{/*              {{ .Values.master.command }} ${ARGS[@]}*/}}
+{{/*              {{- else }}*/}}
+              redis-server "${ARGS[@]}"
+{{/*              {{- end }}*/}}
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ template "tom-redis.secretName" . }}
+                  key: {{ .Values.secretPasswordKey }}
+            - name: REDIS_HOST_LOCAL
+              value: "localhost"
+            - name: REDIS_PORT_LOCAL
+              value: {{ .Values.redisPort | quote }}
+            - name: REDIS_HOST_MASTER
+              value: {{ include "tom-redis.masterHost" . }}
+            - name: REDIS_PORT_MASTER
+              value: {{ .Values.redisPort | quote }}
+          ports:
+            - name: redis
+              containerPort: 6379
+              protocol: TCP
+          livenessProbe:
+            {{- toYaml .Values.main.livenessProbe | nindent 12 }}
+            exec:
+              command:
+                - sh
+                - -c
+                - /health/ping_liveness_local.sh {{ .Values.main.livenessProbe.timeoutSeconds }}
+          readinessProbe:
+            {{- toYaml .Values.main.readinessProbe | nindent 12 }}
+            exec:
+              command:
+                - sh
+                - -c
+                - /health/ping_readiness_local.sh {{ .Values.main.readinessProbe.timeoutSeconds }}
+          volumeMounts:
+            - name: health
+              mountPath: /health
+            - name: redis-data
+              mountPath: {{ .Values.main.persistence.path }}
+            - name: conf
+              mountPath: /mnt/conf
+          resources: {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: health
+          configMap:
+            name: {{ template "tom-redis.fullname" . }}-health
+            defaultMode: 0755
+        - name: config-map
+          configMap:
+            name: {{ template "tom-redis.fullname" . }}
+        - name: conf
+          emptyDir: {}
+  volumeClaimTemplates:
+    - metadata:
+        name: redis-data
+        labels: {{- include "tom-redis.labels" . | nindent 10 }}
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: {{ .Values.main.persistence.size | quote }}
+        storageClassName: {{ .Values.main.storageClassName }}
+{{/*        selector:*/}}
+{{/*          matchLabels: {{- toYaml .Values.master.persistence.matchLabels | nindent 12 }}*/}}
+{{/*          matchExpressions: {{- toYaml .Values.master.persistence.matchExpressions | nindent 12 }}*/}}

@@ -1,0 +1,113 @@
+# Default values for tom-redis.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+images:
+  main: "redis:5.0.8"
+  sentinel: "redis:5.0.8"
+
+redisPort: 6379
+
+main:
+  replicaCount: 2
+  livenessProbe:
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    timeoutSeconds: 5
+    successThreshold: 1
+    failureThreshold: 5
+    # failureThreshold: 10000 # 如果需要通过DEBUG SLEEP让节点down掉，则需要调高failureThreshold，这样节点"卡死"后就不会自动重启了
+  readinessProbe:
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    timeoutSeconds: 1
+    successThreshold: 1
+    failureThreshold: 5
+  disableCommands:
+    - FLUSHDB
+    - FLUSHALL
+  persistence:
+    path: /data
+    size: 8Gi
+  storageClassName: standard
+
+sentinel:
+  replicaCount: 3
+  quorum: 2
+  # TODO what is best value for downAfterMilliseconds and failoverTimeout?
+  downAfterMilliseconds: 60000
+  failoverTimeout: 18000
+  parallelSyncs: 1
+  port: 26379
+  livenessProbe:
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    timeoutSeconds: 5
+    successThreshold: 1
+    failureThreshold: 5
+  readinessProbe:
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    timeoutSeconds: 1
+    successThreshold: 1
+    failureThreshold: 5
+  masterSet: mymaster
+
+password: "this_is_a_password"
+secretPasswordKey: "redis-password"
+
+enableAof: true
+disableRdb: true
+# TODO 还没有任何和enable rdb相关的...
+slaveReadOnly: true
+
+#imagePullSecrets: [] # NOTE 暂时删除，简化
+nameOverride: ""
+fullnameOverride: ""
+
+clusterDomain: cluster.local
+
+serviceAccount:
+  # Specifies whether a service account should be created
+  create: true
+  # Annotations to add to the service account
+  annotations: {}
+  # The name of the service account to use.
+  # If not set and create is true, a name is generated using the fullname template
+  name: ""
+
+#podAnnotations: {}
+
+# podSecurityContext: {} # NOTE 暂时删除，简化
+# fsGroup: 2000
+
+securityContext: {}
+  # capabilities:
+  #   drop:
+#   - ALL
+# readOnlyRootFilesystem: true
+# runAsNonRoot: true
+# runAsUser: 1000
+
+resources: {}
+  # We usually recommend not to specify default resources and to leave this as a conscious
+  # choice for the user. This also increases chances charts run on environments with little
+  # resources, such as Minikube. If you do want to specify resources, uncomment the following
+  # lines, adjust them as necessary, and remove the curly braces after 'resources:'.
+  # limits:
+  #   cpu: 100m
+  #   memory: 128Mi
+# requests:
+#   cpu: 100m
+#   memory: 128Mi
+
+#autoscaling:
+#  enabled: false
+#  minReplicas: 1
+#  maxReplicas: 100
+#  targetCPUUtilizationPercentage: 80
+#  # targetMemoryUtilizationPercentage: 80
+
+#nodeSelector: {}
+#tolerations: []
+#affinity: {}

@@ -1,0 +1,72 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ template "tom-redis.fullname" . }}-health
+  labels:
+    {{- include "tom-redis.labels" . | nindent 4 }}
+data:
+  ping_readiness_local.sh: |-
+{{ include "pingSingle" (dict "modeStr" "LOCAL" "alsoCheckLoading" false) | indent 4 }}
+  ping_liveness_local.sh: |-
+{{ include "pingSingle" (dict "modeStr" "LOCAL" "alsoCheckLoading" true) | indent 4 }}
+
+  ping_sentinel.sh: |-
+    #!/bin/bash
+    set -exu
+
+    no_auth_warning=$([[ "$(redis-cli --version)" =~ (redis-cli 5.*) ]] && echo --no-auth-warning)
+     response=$(
+      timeout -s 3 $1 \
+      redis-cli \
+        -a $REDIS_PASSWORD $no_auth_warning \
+        -h localhost \
+        -p $REDIS_SENTINEL_PORT \
+        ping
+    )
+    if [ "$response" != "PONG" ]; then
+      echo "$response"
+      exit 1
+    fi
+
+{{/*  parse_sentinels.awk: |-*/}}
+{{/*    /ip/ {FOUND_IP=1}*/}}
+{{/*    /port/ {FOUND_PORT=1}*/}}
+{{/*    /runid/ {FOUND_RUNID=1}*/}}
+{{/*    !/ip|port|runid/ {*/}}
+{{/*      if (FOUND_IP==1) {*/}}
+{{/*        IP=$1; FOUND_IP=0;*/}}
+{{/*      }*/}}
+{{/*      else if (FOUND_PORT==1) {*/}}
+{{/*        PORT=$1;*/}}
+{{/*        FOUND_PORT=0;*/}}
+{{/*      } else if (FOUND_RUNID==1) {*/}}
+{{/*        printf "\nsentinel known-sentinel {{ .Values.sentinel.masterSet }} %s %s %s", IP, PORT, $0; FOUND_RUNID=0;*/}}
+{{/*      }*/}}
+{{/*    }*/}}
+
+
+{{/* named args: https://github.com/helm/helm/issues/3215 */}}
+{{- define "pingSingle" -}}
+#!/bin/bash
+set -exu
+
+no_auth_warning=$([[ "$(redis-cli --version)" =~ (redis-cli 5.*) ]] && echo --no-auth-warning)
+response=$(
+timeout -s 3 $1 \
+redis-cli \
+-a $REDIS_PASSWORD $no_auth_warning \
+-h $REDIS_HOST_{{ .modeStr }} \
+-p $REDIS_PORT_{{ .modeStr }} \
+ping
+)
+
+{{- if .alsoCheckLoading }}
+if [ "$response" != "PONG" ] && [ "$response" != "LOADING Redis is loading the dataset in memory" ]; then
+{{- else }}
+if [ "$response" != "PONG" ]; then
+{{- end }}
+echo "$response"
+exit 1
+fi
+
+{{- end -}}
